@@ -19,6 +19,20 @@ export class AuditSessionController {
   }
 
   /**
+   * Handler submit hitungan fisik batch oleh Staf (Tahap 2)
+   */
+  async submitCounts(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const staffId = req.user!.id;
+      const sessionId = req.params.id;
+      const result = await auditSessionService.submitCounts(staffId, sessionId, req.body);
+      sendSuccess(res, 'Hitungan fisik berhasil dikirimkan dan selisih (variance) berhasil dihitung', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Handler daftar semua sesi audit
    */
   async findAllSessions(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
