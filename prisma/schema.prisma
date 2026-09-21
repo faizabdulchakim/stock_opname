@@ -8,18 +8,114 @@ datasource db {
 }
 
 enum Role {
-  ADMIN
-  USER
+  WAREHOUSE_STAFF
+  WAREHOUSE_MANAGER
+}
+
+enum SessionStatus {
+  INITIATED        // Sesi dibuat oleh Manager & stok di-snapshot
+  COUNT_SUBMITTED  // Staff telah submit hitungan fisik (batch)
+  RECONCILING      // Sedang dalam proses rekonsiliasi background async
+  APPROVED         // Rekonsiliasi selesai & stok resmi terupdate
+  REJECTED         // Sesi ditolak oleh Manager
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String
-  role      Role     @default(USER)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                String         @id @default(uuid())
+  email             String         @unique
+  password          String
+  name              String
+  role              Role           @default(WAREHOUSE_STAFF)
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  
+  initiatedSessions AuditSession[] @relation("SessionInitiator")
+  submittedSessions AuditSession[] @relation("SessionSubmitter")
+  approvedSessions  AuditSession[] @relation("SessionApprover")
+  auditLogs         InventoryAuditLog[]
 
   @@map("users")
+}
+
+model Product {
+  id           String             @id @default(uuid())
+  sku          String             @unique
+  name         String
+  currentStock Int                @default(0) @map("current_stock")
+  unit         String             @default("PCS")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  sessionItems AuditSessionItem[]
+  auditLogs    InventoryAuditLog[]
+
+  @@map("products")
+}
+
+model AuditSession {
+  id             String             @id @default(uuid())
+  sessionCode    String             @unique @map("session_code")
+  status         SessionStatus      @default(INITIATED)
+  notes          String?
+
+  createdById    String             @map("created_by_id")
+  createdBy      User               @relation("SessionInitiator", fields: [createdById], references: [id])
+
+  submittedById  String?            @map("submitted_by_id")
+  submittedBy    User?              @relation("SessionSubmitter", fields: [submittedById], references: [id])
+  submittedAt    DateTime?          @map("submitted_at")
+
+  approvedById   String?            @map("approved_by_id")
+  approvedBy     User?              @relation("SessionApprover", fields: [approvedById], references: [id])
+  approvedAt     DateTime?          @map("approved_at")
+  rejectedAt     DateTime?          @map("rejected_at")
+
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  items          AuditSessionItem[]
+  auditLogs      InventoryAuditLog[]
+
+  @@map("audit_sessions")
+}
+
+model AuditSessionItem {
+  id            String       @id @default(uuid())
+  sessionId     String       @map("session_id")
+  session       AuditSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  productId     String       @map("product_id")
+  product       Product      @relation(fields: [productId], references: [id])
+
+  snapshotStock Int          @map("snapshot_stock") // Baseline expected stock at initiation
+  countedStock  Int?         @map("counted_stock")  // Physical count from staff
+  variance      Int?         @map("variance")       // countedStock - snapshotStock
+  notes         String?
+
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@unique([sessionId, productId])
+  @@map("audit_session_items")
+}
+
+model InventoryAuditLog {
+  id             String        @id @default(uuid())
+  productId      String        @map("product_id")
+  product        Product       @relation(fields: [productId], references: [id])
+
+  sessionId      String?       @map("session_id")
+  session        AuditSession? @relation(fields: [sessionId], references: [id])
+
+  beforeStock    Int           @map("before_stock")
+  afterStock     Int           @map("after_stock")
+  changeQty      Int           @map("change_qty") // variance adjustment (+/-)
+  reason         String        @default("STOCK_OPNAME_RECONCILIATION")
+
+  actionByUserId String        @map("action_by_user_id")
+  actionByUser   User          @relation(fields: [actionByUserId], references: [id])
+
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@map("inventory_audit_logs")
 }
