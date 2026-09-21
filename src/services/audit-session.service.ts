@@ -60,7 +60,6 @@ export class AuditSessionService {
    * Tahap 2: Pengiriman Hitungan Fisik Batch oleh Staf Gudang
    */
   async submitCounts(staffId: string, sessionId: string, input: SubmitCountsInput) {
-    // 1. Cari sesi audit dan items-nya
     const session = await prisma.auditSession.findUnique({
       where: { id: sessionId },
       include: { items: true },
@@ -70,7 +69,6 @@ export class AuditSessionService {
       throw new AppError('Sesi audit tidak ditemukan', 404);
     }
 
-    // 2. Validasi State: hanya boleh disubmit jika statusnya masih INITIATED
     if (session.status !== SessionStatus.INITIATED) {
       throw new AppError(
         `Tidak dapat mengirimkan hitungan: Sesi audit berada dalam status '${session.status}', bukan 'INITIATED'`,
@@ -78,7 +76,6 @@ export class AuditSessionService {
       );
     }
 
-    // 3. Petakan item yang ada di sesi untuk memvalidasi productId dan mengambil snapshotStock
     const itemMap = new Map(session.items.map((item) => [item.productId, item]));
 
     for (const submittedItem of input.items) {
@@ -90,12 +87,9 @@ export class AuditSessionService {
       }
     }
 
-    // 4. Jalankan atomic transaction: Update item fisik & selisih variance, lalu update status sesi
     return prisma.$transaction(async (tx) => {
       for (const submittedItem of input.items) {
         const existingItem = itemMap.get(submittedItem.productId)!;
-        
-        // Hitung variance: (Stok Fisik yang Dihitung) - (Stok Baseline Snapshot)
         const variance = submittedItem.countedStock - existingItem.snapshotStock;
 
         await tx.auditSessionItem.update({
@@ -108,7 +102,6 @@ export class AuditSessionService {
         });
       }
 
-      // Update status sesi menjadi COUNT_SUBMITTED
       return tx.auditSession.update({
         where: { id: sessionId },
         data: {
@@ -136,7 +129,188 @@ export class AuditSessionService {
   }
 
   /**
-   * Mengambil daftar semua sesi audit (Bisa difilter status)
+   * Tahap 3: Approval & Async Reconciliation oleh Manager
+   * Fast Non-blocking Endpoint & Idempotent Guard
+   */
+  async approveSession(managerId: string, sessionId: string) {
+    const session = await prisma.auditSession.findUnique({
+      where: { id: sessionId },
+      include: { items: true },
+    });
+
+    if (!session) {
+      throw new AppError('Sesi audit tidak ditemukan', 404);
+    }
+
+    // Idempotency: Jika sudah pernah diapprove atau sedang dalam proses, kembalikan status aman tanpa duplikasi
+    if (session.status === SessionStatus.APPROVED) {
+      return {
+        sessionId: session.id,
+        sessionCode: session.sessionCode,
+        status: SessionStatus.APPROVED,
+        message: 'Sesi audit sudah disetujui sebelumnya (Idempotent: tidak ada penyesuaian ganda)',
+      };
+    }
+
+    if (session.status === SessionStatus.RECONCILING) {
+      return {
+        sessionId: session.id,
+        sessionCode: session.sessionCode,
+        status: SessionStatus.RECONCILING,
+        message: 'Sesi audit sedang dalam proses rekonsiliasi asinkron di background',
+      };
+    }
+
+    if (session.status !== SessionStatus.COUNT_SUBMITTED) {
+      throw new AppError(
+        `Hanya sesi berstatus 'COUNT_SUBMITTED' yang dapat disetujui (Status saat ini: '${session.status}')`,
+        400
+      );
+    }
+
+    // 1. Kunci status ke RECONCILING secara instan (Atomic Lock)
+    const updatedSession = await prisma.auditSession.update({
+      where: { id: sessionId },
+      data: {
+        status: SessionStatus.RECONCILING,
+        approvedById: managerId,
+        approvedAt: new Date(),
+      },
+    });
+
+    // 2. Jalankan background worker async (Non-blocking)
+    setImmediate(async () => {
+      try {
+        await this.executeReconciliation(sessionId, managerId);
+      } catch (err) {
+        console.error(`[Async Reconciler Error] Gagal merekonsiliasi sesi ${sessionId}:`, err);
+      }
+    });
+
+    // 3. Return cepat (HTTP 202 Accepted)
+    return {
+      sessionId: updatedSession.id,
+      sessionCode: updatedSession.sessionCode,
+      status: SessionStatus.RECONCILING,
+      message: 'Sesi audit telah disetujui. Proses rekonsiliasi stok dan pencatatan audit log sedang berjalan di background.',
+    };
+  }
+
+  /**
+   * Background Async Worker: Melakukan kalkulasi rekonsiliasi stok dan pencatatan durable audit log
+   */
+  async executeReconciliation(sessionId: string, managerId: string) {
+    const session = await prisma.auditSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        items: {
+          include: { product: true },
+        },
+      },
+    });
+
+    if (!session || session.items.length === 0) return;
+
+    // Transaksi database atomic untuk memastikan seluruh produk & log tersimpan utuh
+    await prisma.$transaction(async (tx) => {
+      for (const item of session.items) {
+        if (item.variance === null || item.countedStock === null) continue;
+
+        const currentOfficialStock = item.product.currentStock;
+        // Rekonsiliasi: Stok resmi baru disesuaikan dengan variance (atau countedStock)
+        const newStock = currentOfficialStock + item.variance;
+
+        // 1. Update stok resmi di tabel master products
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { currentStock: newStock },
+        });
+
+        // 2. Buat catatan Durable Audit Log
+        await tx.inventoryAuditLog.create({
+          data: {
+            productId: item.productId,
+            sessionId: session.id,
+            beforeStock: currentOfficialStock,
+            afterStock: newStock,
+            changeQty: item.variance,
+            reason: `STOCK_OPNAME_RECONCILIATION: Sesi [${session.sessionCode}]`,
+            actionByUserId: managerId,
+          },
+        });
+      }
+
+      // 3. Finalisasi status sesi menjadi APPROVED
+      await tx.auditSession.update({
+        where: { id: sessionId },
+        data: {
+          status: SessionStatus.APPROVED,
+        },
+      });
+    });
+
+    console.log(`✅ [Async Reconciler] Sesi '${session.sessionCode}' berhasil direkonsiliasi secara penuh!`);
+  }
+
+  /**
+   * Reject Sesi Audit oleh Manager
+   */
+  async rejectSession(managerId: string, sessionId: string, reason?: string) {
+    const session = await prisma.auditSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new AppError('Sesi audit tidak ditemukan', 404);
+    }
+
+    if (session.status === SessionStatus.APPROVED || session.status === SessionStatus.RECONCILING) {
+      throw new AppError(
+        `Tidak dapat menolak sesi yang sudah dalam status '${session.status}'`,
+        400
+      );
+    }
+
+    return prisma.auditSession.update({
+      where: { id: sessionId },
+      data: {
+        status: SessionStatus.REJECTED,
+        rejectedAt: new Date(),
+        notes: reason ? `${session.notes || ''} | Alasan Penolakan: ${reason}` : session.notes,
+      },
+      include: {
+        createdBy: true,
+        submittedBy: true,
+      },
+    });
+  }
+
+  /**
+   * Mengambil riwayat Durable Inventory Audit Logs
+   */
+  async getAuditLogs(productId?: string, sessionId?: string) {
+    return prisma.inventoryAuditLog.findMany({
+      where: {
+        ...(productId && { productId }),
+        ...(sessionId && { sessionId }),
+      },
+      include: {
+        product: {
+          select: { id: true, sku: true, name: true, unit: true },
+        },
+        actionByUser: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+        session: {
+          select: { id: true, sessionCode: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Mengambil daftar semua sesi audit
    */
   async findAllSessions(status?: SessionStatus) {
     return prisma.auditSession.findMany({

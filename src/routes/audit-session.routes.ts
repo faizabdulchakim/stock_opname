@@ -15,6 +15,32 @@ router.use(authenticate);
 
 /**
  * @openapi
+ * /api/audit-sessions/logs/audit-history:
+ *   get:
+ *     summary: Mendapatkan riwayat durable inventory audit logs
+ *     tags:
+ *       - Stock Opname Lifecycle
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: productId
+ *         schema:
+ *           type: string
+ *         description: Filter riwayat berdasarkan ID Produk
+ *       - in: query
+ *         name: sessionId
+ *         schema:
+ *           type: string
+ *         description: Filter riwayat berdasarkan ID Sesi Audit
+ *     responses:
+ *       200:
+ *         description: Daftar riwayat mutasi stok
+ */
+router.get('/logs/audit-history', auditSessionController.getAuditLogs);
+
+/**
+ * @openapi
  * /api/audit-sessions:
  *   post:
  *     summary: Inisiasi sesi audit baru & snapshot baseline stok (Manager Only)
@@ -155,6 +181,75 @@ router.post(
   requireRole(['WAREHOUSE_STAFF', 'WAREHOUSE_MANAGER']),
   validate(submitCountsSchema),
   auditSessionController.submitCounts
+);
+
+/**
+ * @openapi
+ * /api/audit-sessions/{id}/approve:
+ *   post:
+ *     summary: Approve sesi audit & trigger rekonsiliasi stok asinkron (Tahap 3 - Manager Only)
+ *     tags:
+ *       - Stock Opname Lifecycle
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       202:
+ *         description: Permintaan diterima (Fast Non-blocking), proses rekonsiliasi stok & audit log berjalan di background
+ *       400:
+ *         description: Status sesi bukan COUNT_SUBMITTED
+ *       403:
+ *         description: Forbidden (Hanya Warehouse Manager)
+ *       404:
+ *         description: Sesi audit tidak ditemukan
+ */
+router.post(
+  '/:id/approve',
+  requireRole(['WAREHOUSE_MANAGER']),
+  validate(getSessionByIdSchema),
+  auditSessionController.approveSession
+);
+
+/**
+ * @openapi
+ * /api/audit-sessions/{id}/reject:
+ *   post:
+ *     summary: Reject sesi audit (Manager Only)
+ *     tags:
+ *       - Stock Opname Lifecycle
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 example: "Hitungan fisik tidak konsisten, perlu diulang"
+ *     responses:
+ *       200:
+ *         description: Sesi audit berhasil ditolak (status REJECTED)
+ *       403:
+ *         description: Forbidden (Hanya Warehouse Manager)
+ */
+router.post(
+  '/:id/reject',
+  requireRole(['WAREHOUSE_MANAGER']),
+  validate(getSessionByIdSchema),
+  auditSessionController.rejectSession
 );
 
 export default router;
