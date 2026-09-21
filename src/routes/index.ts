@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes';
+import productRoutes from './product.routes';
 
 const router = Router();
 
@@ -18,10 +19,11 @@ router.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    service: 'api_service',
+    service: 'stock_opname_reconciliation_api',
   });
 });
 
 router.use('/auth', authRoutes);
+router.use('/products', productRoutes);
 
 export default router;

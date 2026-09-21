@@ -1,7 +1,7 @@
 {
   "name": "stock_opname",
   "version": "1.0.0",
-  "description": "Stock Opname REST API with Express, PostgreSQL, Prisma, JWT, Zod Validation, Swagger and Jest",
+  "description": "Stock Opname & Async Inventory Reconciliation REST API",
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
@@ -9,10 +9,13 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio",
+    "prisma:seed": "ts-node prisma/seed.ts",
     "test": "jest --detectOpenHandles --runInBand",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   },
   "keywords": [
     "express",
@@ -22,10 +25,9 @@
     "swagger",
     "zod",
     "jest",
-    "stock-opname"
+    "stock-opname",
+    "reconciliation"
   ],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@prisma/client": "^6.4.1",
     "bcryptjs": "^3.0.2",

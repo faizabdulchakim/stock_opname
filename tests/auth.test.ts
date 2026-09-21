@@ -2,7 +2,8 @@ import request from 'supertest';
 import app from '../src/app';
 import prisma from '../src/config/prisma';
 import bcrypt from 'bcryptjs';
-import { signToken, verifyToken } from '../src/utils/jwt';
+import { Role } from '@prisma/client';
+import { signToken, verifyToken, JwtPayload } from '../src/utils/jwt';
 
 // Mock Prisma Client for Unit Tests
 jest.mock('../src/config/prisma', () => ({
@@ -16,7 +17,7 @@ jest.mock('../src/config/prisma', () => ({
   },
 }));
 
-describe('Boilerplate Auth & Validation Tests', () => {
+describe('Auth Module & JWT Unit Tests', () => {
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -30,11 +31,12 @@ describe('Boilerplate Auth & Validation Tests', () => {
   });
 
   describe('JWT Utility', () => {
-    it('should correctly sign and verify a JWT token', () => {
-      const payload = {
+    it('should correctly sign and verify a JWT token with Role and Name', () => {
+      const payload: JwtPayload = {
         id: 'user-123',
-        email: 'test@example.com',
-        role: 'ADMIN',
+        name: 'Budi Santoso',
+        email: 'budi@warehouse.com',
+        role: Role.WAREHOUSE_MANAGER,
       };
 
       const token = signToken(payload);
@@ -42,6 +44,7 @@ describe('Boilerplate Auth & Validation Tests', () => {
 
       const decoded = verifyToken(token);
       expect(decoded.id).toBe(payload.id);
+      expect(decoded.name).toBe(payload.name);
       expect(decoded.email).toBe(payload.email);
       expect(decoded.role).toBe(payload.role);
     });
@@ -62,8 +65,8 @@ describe('Boilerplate Auth & Validation Tests', () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
-          name: 'Faiz',
-          email: 'faiz@example.com',
+          name: 'Agus',
+          email: 'agus@warehouse.com',
           password: '123',
         });
 
@@ -71,13 +74,13 @@ describe('Boilerplate Auth & Validation Tests', () => {
       expect(res.body.success).toBe(false);
     });
 
-    it('should register a new user successfully', async () => {
+    it('should register a new warehouse staff successfully', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.user.create as jest.Mock).mockResolvedValue({
-        id: 'user-uuid-1',
-        name: 'Faiz Abdul',
-        email: 'faiz@example.com',
-        role: 'USER',
+        id: 'user-staff-uuid-1',
+        name: 'Agus Prasetyo',
+        email: 'agus@warehouse.com',
+        role: Role.WAREHOUSE_STAFF,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -85,14 +88,16 @@ describe('Boilerplate Auth & Validation Tests', () => {
       const res = await request(app)
         .post('/api/auth/register')
         .send({
-          name: 'Faiz Abdul',
-          email: 'faiz@example.com',
+          name: 'Agus Prasetyo',
+          email: 'agus@warehouse.com',
           password: 'password123',
+          role: 'WAREHOUSE_STAFF',
         });
 
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.user.email).toBe('faiz@example.com');
+      expect(res.body.data.user.email).toBe('agus@warehouse.com');
+      expect(res.body.data.user.role).toBe(Role.WAREHOUSE_STAFF);
       expect(res.body.data.token).toBeDefined();
     });
   });
@@ -104,7 +109,7 @@ describe('Boilerplate Auth & Validation Tests', () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({
-          email: 'notfound@example.com',
+          email: 'unknown@warehouse.com',
           password: 'password123',
         });
 
@@ -115,11 +120,11 @@ describe('Boilerplate Auth & Validation Tests', () => {
     it('should login successfully with valid credentials', async () => {
       const hashedPassword = await bcrypt.hash('password123', 10);
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-        id: 'user-uuid-1',
-        name: 'Faiz Abdul',
-        email: 'faiz@example.com',
+        id: 'user-manager-uuid-1',
+        name: 'Budi Santoso',
+        email: 'manager@warehouse.com',
         password: hashedPassword,
-        role: 'USER',
+        role: Role.WAREHOUSE_MANAGER,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -127,14 +132,15 @@ describe('Boilerplate Auth & Validation Tests', () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({
-          email: 'faiz@example.com',
+          email: 'manager@warehouse.com',
           password: 'password123',
         });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.token).toBeDefined();
-      expect(res.body.data.user.email).toBe('faiz@example.com');
+      expect(res.body.data.user.email).toBe('manager@warehouse.com');
+      expect(res.body.data.user.role).toBe(Role.WAREHOUSE_MANAGER);
     });
   });
 
@@ -147,16 +153,17 @@ describe('Boilerplate Auth & Validation Tests', () => {
 
     it('should return profile when valid token provided', async () => {
       const token = signToken({
-        id: 'user-uuid-1',
-        email: 'faiz@example.com',
-        role: 'USER',
+        id: 'user-staff-uuid-1',
+        name: 'Agus Prasetyo',
+        email: 'staff@warehouse.com',
+        role: Role.WAREHOUSE_STAFF,
       });
 
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-        id: 'user-uuid-1',
-        name: 'Faiz Abdul',
-        email: 'faiz@example.com',
-        role: 'USER',
+        id: 'user-staff-uuid-1',
+        name: 'Agus Prasetyo',
+        email: 'staff@warehouse.com',
+        role: Role.WAREHOUSE_STAFF,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -167,7 +174,8 @@ describe('Boilerplate Auth & Validation Tests', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.email).toBe('faiz@example.com');
+      expect(res.body.data.email).toBe('staff@warehouse.com');
+      expect(res.body.data.role).toBe(Role.WAREHOUSE_STAFF);
     });
   });
 });

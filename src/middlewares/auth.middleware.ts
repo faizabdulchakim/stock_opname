@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { Role } from '@prisma/client';
 import { verifyToken, JwtPayload } from '../utils/jwt';
 import { sendError } from '../utils/response';
 
@@ -30,15 +31,19 @@ export const authenticate = (req: AuthenticatedRequest, res: Response, next: Nex
   }
 };
 
-export const authorize = (roles: string[]) => {
+export const requireRole = (roles: Role[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
-      sendError(res, 'Akses tidak diizinkan', 401);
+      sendError(res, 'Akses tidak diizinkan: Pengguna belum login', 401);
       return;
     }
 
     if (!roles.includes(req.user.role)) {
-      sendError(res, 'Akses ditolak: Anda tidak memiliki izin untuk resource ini', 403);
+      sendError(
+        res,
+        `Akses ditolak: Resource ini hanya dapat diakses oleh role [${roles.join(', ')}]`,
+        403
+      );
       return;
     }
 
