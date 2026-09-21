@@ -2,7 +2,11 @@ import { Router } from 'express';
 import auditSessionController from '../controllers/audit-session.controller';
 import { validate } from '../middlewares/validate.middleware';
 import { authenticate, requireRole } from '../middlewares/auth.middleware';
-import { createSessionSchema, getSessionByIdSchema } from '../schemas/audit-session.schema';
+import {
+  createSessionSchema,
+  getSessionByIdSchema,
+  submitCountsSchema,
+} from '../schemas/audit-session.schema';
 
 const router = Router();
 
@@ -95,5 +99,62 @@ router.get('/', auditSessionController.findAllSessions);
  *         description: Sesi audit tidak ditemukan
  */
 router.get('/:id', validate(getSessionByIdSchema), auditSessionController.findSessionById);
+
+/**
+ * @openapi
+ * /api/audit-sessions/{id}/submit-counts:
+ *   post:
+ *     summary: Submit hitungan fisik batch oleh Staf Gudang (Tahap 2)
+ *     tags:
+ *       - Stock Opname Lifecycle
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - productId
+ *                     - countedStock
+ *                   properties:
+ *                     productId:
+ *                       type: string
+ *                       format: uuid
+ *                       example: "f84b65dc-724e-4f1c-8e41-03714b98dfca"
+ *                     countedStock:
+ *                       type: integer
+ *                       example: 115
+ *                     notes:
+ *                       type: string
+ *                       example: "5 unit rusak/pecah"
+ *     responses:
+ *       200:
+ *         description: Hitungan fisik berhasil disimpan & status berubah menjadi COUNT_SUBMITTED
+ *       400:
+ *         description: Sesi tidak dalam status INITIATED atau format batch tidak valid
+ *       404:
+ *         description: Sesi audit tidak ditemukan
+ */
+router.post(
+  '/:id/submit-counts',
+  requireRole(['WAREHOUSE_STAFF', 'WAREHOUSE_MANAGER']),
+  validate(submitCountsSchema),
+  auditSessionController.submitCounts
+);
 
 export default router;

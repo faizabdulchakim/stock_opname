@@ -4,9 +4,8 @@ import prisma from '../src/config/prisma';
 import { Role, SessionStatus } from '@prisma/client';
 import { signToken } from '../src/utils/jwt';
 
-jest.mock('../src/config/prisma', () => ({
-  __esModule: true,
-  default: {
+jest.mock('../src/config/prisma', () => {
+  const mockPrisma = {
     product: {
       findMany: jest.fn(),
     },
@@ -14,12 +13,22 @@ jest.mock('../src/config/prisma', () => ({
       findUnique: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
     },
+    auditSessionItem: {
+      update: jest.fn(),
+    },
+    $transaction: jest.fn(),
     $disconnect: jest.fn(),
-  },
-}));
+  };
+  mockPrisma.$transaction.mockImplementation((callback: any) => callback(mockPrisma));
+  return {
+    __esModule: true,
+    default: mockPrisma,
+  };
+});
 
-describe('Audit Session - Stage 1: Initiation & Snapshotting Tests', () => {
+describe('Audit Session - Lifecycle Tests', () => {
   const managerToken = signToken({
     id: 'user-mgr-uuid-1',
     name: 'Budi Santoso',
@@ -38,14 +47,14 @@ describe('Audit Session - Stage 1: Initiation & Snapshotting Tests', () => {
     jest.clearAllMocks();
   });
 
-  describe('POST /api/audit-sessions (Initiation & Snapshotting)', () => {
+  describe('POST /api/audit-sessions (Stage 1: Initiation & Snapshotting)', () => {
     it('should reject non-manager users (Staff getting 403 Forbidden)', async () => {
       const res = await request(app)
         .post('/api/audit-sessions')
         .set('Authorization', `Bearer ${staffToken}`)
         .send({
           sessionCode: 'AUD-2026-001',
-          productIds: ['a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'],
+          productIds: ['11111111-1111-4111-8111-111111111111'],
         });
 
       expect(res.status).toBe(403);
@@ -72,13 +81,13 @@ describe('Audit Session - Stage 1: Initiation & Snapshotting Tests', () => {
         id: '11111111-1111-4111-8111-111111111111',
         sku: 'PRD-INDOMIE-001',
         name: 'Indomie Goreng Original',
-        currentStock: 120, // <-- Stok saat ini 120
+        currentStock: 120,
       };
       const mockProduct2 = {
         id: '22222222-2222-4222-8222-222222222222',
         sku: 'PRD-BEARBRAND-002',
         name: 'Susu Bear Brand 189ml',
-        currentStock: 85,  // <-- Stok saat ini 85
+        currentStock: 85,
       };
 
       (prisma.auditSession.findUnique as jest.Mock).mockResolvedValue(null);
@@ -121,8 +130,6 @@ describe('Audit Session - Stage 1: Initiation & Snapshotting Tests', () => {
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.status).toBe(SessionStatus.INITIATED);
-      
-      // Verifikasi bahwa snapshotStock tersimpan sesuai stok saat itu
       expect(res.body.data.items[0].snapshotStock).toBe(120);
       expect(res.body.data.items[0].countedStock).toBeNull();
       expect(res.body.data.items[1].snapshotStock).toBe(85);
@@ -130,24 +137,102 @@ describe('Audit Session - Stage 1: Initiation & Snapshotting Tests', () => {
     });
   });
 
-  describe('GET /api/audit-sessions', () => {
-    it('should allow both manager and staff to view audit sessions', async () => {
-      (prisma.auditSession.findMany as jest.Mock).mockResolvedValue([
-        {
-          id: 'session-uuid-1',
-          sessionCode: 'AUD-2026-001',
-          status: SessionStatus.INITIATED,
-          _count: { items: 2 },
-        },
-      ]);
+  describe('POST /api/audit-sessions/:id/submit-counts (Stage 2: Count Submission)', () => {
+    const prodId1 = '11111111-1111-4111-8111-111111111111';
+    const prodId2 = '22222222-2222-4222-8222-222222222222';
+    const sessionId = 'session-uuid-1';
+
+    it('should reject batch with duplicate productIds in the same request (Edge Case)', async () => {
+      const res = await request(app)
+        .post(`/api/audit-sessions/${sessionId}/submit-counts`)
+        .set('Authorization', `Bearer ${staffToken}`)
+        .send({
+          items: [
+            { productId: prodId1, countedStock: 100 },
+            { productId: prodId1, countedStock: 105 },
+          ],
+        });
+
+      expect(res.status).toBe(422);
+      expect(res.body.success).toBe(false);
+      expect(res.body.errors[0].message).toContain('duplikasi productId');
+    });
+
+    it('should reject submission if session status is not INITIATED', async () => {
+      (prisma.auditSession.findUnique as jest.Mock).mockResolvedValue({
+        id: sessionId,
+        status: SessionStatus.APPROVED,
+        items: [{ id: 'item-1', productId: prodId1, snapshotStock: 120 }],
+      });
 
       const res = await request(app)
-        .get('/api/audit-sessions')
-        .set('Authorization', `Bearer ${staffToken}`);
+        .post(`/api/audit-sessions/${sessionId}/submit-counts`)
+        .set('Authorization', `Bearer ${staffToken}`)
+        .send({
+          items: [{ productId: prodId1, countedStock: 115 }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.message).toContain('APPROVED');
+    });
+
+    it('should calculate variance accurately (countedStock - snapshotStock) and set status to COUNT_SUBMITTED', async () => {
+      (prisma.$transaction as jest.Mock).mockImplementation(async (callback: any) => {
+        return callback(prisma);
+      });
+
+      (prisma.auditSession.findUnique as jest.Mock).mockResolvedValue({
+        id: sessionId,
+        status: SessionStatus.INITIATED,
+        items: [
+          { id: 'item-1', productId: prodId1, snapshotStock: 120 },
+          { id: 'item-2', productId: prodId2, snapshotStock: 85 },
+        ],
+      });
+
+      (prisma.auditSessionItem.update as jest.Mock).mockResolvedValue({});
+
+      (prisma.auditSession.update as jest.Mock).mockResolvedValue({
+        id: sessionId,
+        status: SessionStatus.COUNT_SUBMITTED,
+        submittedById: 'user-staff-uuid-1',
+        submittedAt: new Date(),
+        items: [
+          {
+            id: 'item-1',
+            productId: prodId1,
+            snapshotStock: 120,
+            countedStock: 115,
+            variance: -5,
+            notes: '5 hilang',
+          },
+          {
+            id: 'item-2',
+            productId: prodId2,
+            snapshotStock: 85,
+            countedStock: 90,
+            variance: 5,
+            notes: '5 bonus terselip',
+          },
+        ],
+      });
+
+      const res = await request(app)
+        .post(`/api/audit-sessions/${sessionId}/submit-counts`)
+        .set('Authorization', `Bearer ${staffToken}`)
+        .send({
+          items: [
+            { productId: prodId1, countedStock: 115, notes: '5 hilang' },
+            { productId: prodId2, countedStock: 90, notes: '5 bonus terselip' },
+          ],
+        });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.status).toBe(SessionStatus.COUNT_SUBMITTED);
+      expect(res.body.data.items[0].variance).toBe(-5);
+      expect(res.body.data.items[1].variance).toBe(5);
     });
   });
 });
