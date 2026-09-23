@@ -1,45 +1,60 @@
-stock opname Backend
+# Stock Opname Backend
 
-1. clone
-git@github.com:faizabdulchakim/stock_opname.git
+## 1. Clone Repository
+```bash
+git clone git@github.com:faizabdulchakim/stock_opname.git
+```
 
-2. enter project folder stock_opname
+## 2. Enter Project Folder & Install Dependencies
+```bash
+cd stock_opname
 npm install
+```
 
-3. create .env in root foler
+## 3. Create `.env` in Root Folder
+```env
 PORT=3000
 NODE_ENV=development
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/stock_opname_db?schema=public"
 JWT_SECRET="supersecret_jwt_key_stock_opname_2026"
 JWT_EXPIRES_IN="1d"
+```
 
-4.DB Migration and seed
+## 4. DB Migration and Seed
+```bash
 npx prisma db push
 npm run prisma:generate
 npm run prisma:seed
+```
 
-5. run API
+## 5. Run API
+```bash
 npm run dev
+```
 
-API run on port 3000
-http://localhost:3000
+API runs on port 3000:
+- http://localhost:3000
 
-Default Account
-Warehouse Manager = manager@warehouse.com with password	password123
-Warehouse Staff	= staff@warehouse.com with password password123
+### Default Accounts
+- **Warehouse Manager:** `manager@warehouse.com` with password `password123`
+- **Warehouse Staff:** `staff@warehouse.com` with password `password123`
 
-Swagger API Documentation
-http://localhost:3000/api-docs
+### Swagger API Documentation
+- http://localhost:3000/api-docs
 
-6. running unit test
+## 6. Running Unit Test
+```bash
 npm test
--------------------------------
-Tech stacks:
-Nodejs
-Framework: Expressjs
-ORM: Prisma
-DB: PostgreSQL
-Auth: JWT
-Validation: Zod
-Unit Test: Jest + supertest
-Documentation: Swagger
+```
+
+---
+
+## Tech Stacks
+- **Runtime:** Node.js
+- **Framework:** Express.js
+- **ORM:** Prisma
+- **Database:** PostgreSQL
+- **Auth:** JWT
+- **Validation:** Zod
+- **Unit Test:** Jest + Supertest
+- **Documentation:** Swagger
